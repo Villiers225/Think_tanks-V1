@@ -1,0 +1,24 @@
+name: Build & Deploy Atlas Dashboard
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Atlas CLI
+        run: |
+          curl -sSL https://atlas.openai.com/install.sh | bash
+          echo "$HOME/.atlas/bin" >> $GITHUB_PATH
+
+      - name: Export secret
+        run: echo "GH_TOKEN=${{ secrets.GH_TOKEN }}" >> $GITHUB_ENV
+
+      - name: Run Atlas publish
+        run: atlas run build-and-publish
