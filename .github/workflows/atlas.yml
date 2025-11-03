@@ -16,9 +16,15 @@ jobs:
         run: |
           curl -sSL https://atlas.openai.com/install.sh | bash
           echo "$HOME/.atlas/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.atlas/bin:$PATH"
+          atlas version || true
 
-      - name: Export secret
+      - name: Export GH_TOKEN
         run: echo "GH_TOKEN=${{ secrets.GH_TOKEN }}" >> $GITHUB_ENV
 
-      - name: Run Atlas publish
-        run: atlas run build-and-publish
+      - name: Run Atlas job
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          export PATH="$HOME/.atlas/bin:$PATH"
+          atlas run build-and-publish
