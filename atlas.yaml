@@ -1,0 +1,133 @@
+# atlas.yaml
+# Project: Think Tank Landscape – 4IR Defence Study
+
+version: "1"
+
+params:
+  SHEET_CSV_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vSoG9v0lrdPb1tTnSq-mE_PHbokZ6IiE4JbEEfmQHsAH6dlEubwXbJ4HLGx1AMtRFXjDG8YA2S5oGoG/pub?output=csv"
+  GH_REPO: "Villiers225/Think_tanks-V1"
+  GH_PAGES_BRANCH: "gh-pages"
+  SITE_TITLE: "Think Tank Landscape Dashboard"
+  PDF_TITLE: "The Fourth Industrial Revolution: Mapping the Ideological Terrain of Defence Innovation"
+  ORG_NAME: "Atlas"
+  AUTHOR_NAME: "Internal MoD Study Team"
+  CITY: "London"
+  COUNTRY: "UK"
+
+secrets:
+  GH_TOKEN: "${{ secrets.GH_TOKEN }}"     # set via environment or Atlas secrets
+  GOOGLE_SERVICE_ACCOUNT_JSON: ""        # optional: only for direct Google Sheets writes
+
+artifacts:
+  - path: "dist"
+  - path: "site"
+  - path: "outputs"
+
+jobs:
+
+  # 0) Bootstrap repo structure and shared assets
+  - name: init-structure
+    runs:
+      - run: |
+          set -eux
+          mkdir -p site/assets js outputs dist seeds scripts
+          printf "User-agent: *\nAllow: /\n" > site/robots.txt
+          cat > site/assets/styles.css << 'CSS'
+          :root{--fg:#0e1322;--muted:#5b6372;--bg:#ffffff;--accent:#1e6fff;}
+          *{box-sizing:border-box}
+          body{margin:0;padding:24px;font-family:"Gill Sans MT",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--fg);background:var(--bg)}
+          h1,h2,h3{margin:0 0 12px}
+          .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+          .card{border:1px solid #e8e8e8;border-radius:14px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+          table{width:100%;border-collapse:collapse;font-size:14px}
+          th,td{border:1px solid #eee;padding:6px;vertical-align:top}
+          th{background:#fafafa;position:sticky;top:0}
+          input[type="text"]{width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;margin:6px 0 10px}
+          .muted{color:var(--muted);font-size:12px}
+          .pill{display:inline-block;padding:2px 8px;border-radius:999px;background:#eef;margin-right:6px;margin-bottom:4px}
+          .heat td{text-align:center;font-weight:600}
+          a{color:var(--accent);text-decoration:none}
+          a:hover{text-decoration:underline}
+          @media(max-width:980px){.grid{grid-template-columns:1fr}}
+          CSS
+
+  # 2) Build site using the provided SHEET_CSV_URL and publish to gh-pages
+  - name: build-and-publish
+    needs: [init-structure]
+    runs:
+      - run: |
+          set -eux
+          sed -i "s|{{SITE_TITLE}}|${SITE_TITLE}|g" site/index.html || true
+          sed -i "s|{{SHEET_CSV_URL}}|${SHEET_CSV_URL}|g" site/index.html || true
+          git init dist
+          cp -r site/* dist/
+          cd dist
+          git config user.email "atlas-bot@local"
+          git config user.name "Atlas Bot"
+          git add .
+          git commit -m "Deploy dashboard"
+          git branch -M ${GH_PAGES_BRANCH}
+          git remote add origin https://x-access-token:${GH_TOKEN}@github.com/${GH_REPO}.git
+          git push -f origin ${GH_PAGES_BRANCH}
+          echo "Deployed to GitHub Pages branch ${GH_PAGES_BRANCH}."
+
+  # 3) Generate 10-page PDF synthesis from the live Sheet data
+  - name: make-pdf
+    needs: [init-structure]
+    runs:
+      - run: |
+          set -eux
+          pip3 install pandas jinja2 weasyprint requests --quiet
+          python3 - << 'PY'
+import os, requests, pandas as pd
+from jinja2 import Template
+from collections import Counter
+from datetime import datetime
+sheet_url=os.environ["SHEET_CSV_URL"]
+pdf_title=os.environ["PDF_TITLE"]
+org=os.environ["ORG_NAME"]; city=os.environ["CITY"]; country=os.environ["COUNTRY"]
+r=requests.get(sheet_url); r.raise_for_status()
+df=pd.read_csv(pd.compat.StringIO(r.text))
+def cluster(region):
+    if region=='UK': return 'UK'
+    if region=='US': return 'US'
+    if region.startswith('EU') or 'FR' in region: return 'EU'
+    if region in ('AU','Allies'): return 'Allies'
+    if region=='Consulting': return 'Consulting'
+    if region in ('Investment Bank','Finance'): return 'Finance'
+    return 'Other'
+def theme(core):
+    s=(core or '').lower()
+    if 'procurement' in s or 'acquisition' in s: return 'Procurement reform'
+    if 'industrial' in s or 'manufactur' in s or 'dib' in s: return 'Industrial base'
+    if 'ai' in s or 'digital' in s or '4ir' in s or 'technology' in s: return 'AI/4IR'
+    if 'finance' in s or 'ppp' in s or 'capital' in s or 'bank' in s: return 'Financing/PPP'
+    if 'eu' in s or 'transatlantic' in s or 'cooper' in s: return 'Transatlantic/EU policy'
+    return 'Innovation ecosystem'
+df['Cluster']=df['Region'].map(cluster)
+df['Theme']=df['CoreTheme'].map(theme)
+top_clusters=', '.join([f"{k} ({v})" for k,v in Counter(df['Cluster']).most_common(3)])
+top_themes=', '.join([f"{k} ({v})" for k,v in Counter(df['Theme']).most_common(4)])
+consensus="AI/autonomy inevitability; need for industrial capacity and resilient supply chains; closer transatlantic coordination; crowding-in private capital."
+faultlines="Industrial policy vs. market primacy; EU sovereignty vs. US dependency; ‘innovation theatre’ vs. tested capability; budget reform vs. legacy program protection."
+gaps="Financial architecture of adoption; trials & ranges; certification and safety cases; workforce pipelines that actually ship product."
+def list_items():
+    items=[]
+    for _,r in df.sort_values('Year',ascending=False).head(20).iterrows():
+        items.append(f"<li><b>{r['ThinkTank']}</b> ({r['Region']}, {r['Year']}): <i>{r['ReportTitle']}</i> — {r.get('NotesCritique','')}</li>")
+    return "\n".join(items)
+tmpl=Template(open('scripts/synthesis_template.html').read())
+html=tmpl.render(PDF_TITLE=pdf_title,ORG_NAME=org,CITY=city,COUNTRY=country,
+TOTAL=len(df),DATE=datetime.utcnow().strftime('%Y-%m-%d'),
+TOP_CLUSTERS=top_clusters,TOP_THEMES=top_themes,
+CONSENSUS=consensus,FAULTLINES=faultlines,GAPS=gaps,
+BULLETS_RHETORIC_REALITY='',BULLETS_IMPLICATIONS='',ITEMS_APPENDIX=list_items())
+os.makedirs('outputs',exist_ok=True)
+open('outputs/synthesis.html','w',encoding='utf-8').write(html)
+from weasyprint import HTML; HTML(string=html).write_pdf('outputs/think_tank_landscape_brief.pdf')
+print("PDF written to outputs/think_tank_landscape_brief.pdf")
+PY
+
+schedules:
+  - cron: "0 8 * * MON"
+    job: make-pdf
